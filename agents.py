@@ -4,8 +4,17 @@ from typing import TypedDict, Optional
 
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
-
+from langchain_core.messages import (
+    HumanMessage,
+    ToolMessage
+)
+from tools import (
+    search_knowledge,
+    compare_options,
+    calculate_monthly_runway,
+    calculate_break_even_users,
+    calculate_risk_score
+)
 load_dotenv()
 
 
@@ -73,243 +82,35 @@ def ask_gemini(prompt: str) -> str:
 def research_agent(state: LifeOpsState):
 
     prompt = f"""
-You are the Research Agent in a multi-agent decision system.
-
-Analyze the user's goal from a research perspective.
+You are the Research Agent.
 
 User goal:
 {state["user_goal"]}
 
-Identify:
-- Important market/research questions
-- Information that should be investigated
+Use your available tools when they can provide useful information.
+
+Analyze:
+- Market considerations
+- Relevant knowledge
 - Important unknowns
-- Evidence that would be useful
+- Possible alternatives
 
 Do not invent facts.
-If information is unavailable, clearly say so.
+Clearly identify limitations.
 """
 
-    result = ask_gemini(prompt)
+    result = run_agent(
+        model=model,
+        tools=[
+            search_knowledge,
+            compare_options
+        ],
+        prompt=prompt
+    )
 
     return {
         "research_result": result
     }
-
-
-# =========================
-# FINANCIAL EXTRACTION
-# =========================
-
-def extract_money_after_keyword(
-    text: str,
-    keywords: list[str]
-) -> Optional[float]:
-
-    text_lower = text.lower()
-
-    for keyword in keywords:
-
-        pattern = (
-            re.escape(keyword)
-            + r".{0,80}?\$?\s*"
-            r"([0-9]+(?:\.[0-9]+)?)"
-        )
-
-        match = re.search(
-            pattern,
-            text_lower
-        )
-
-        if match:
-            return float(match.group(1))
-
-    return None
-
-
-def calculate_budget_from_text(
-    text: str
-) -> Optional[str]:
-
-    text_lower = text.lower()
-
-    # -----------------------------------------
-    # Budget
-    # -----------------------------------------
-
-    budget = extract_money_after_keyword(
-        text,
-        [
-            "budget",
-            "have",
-            "with a"
-        ]
-    )
-
-    if budget is None:
-        return None
-
-    # -----------------------------------------
-    # Infrastructure
-    # -----------------------------------------
-
-    infrastructure = extract_money_after_keyword(
-        text,
-        [
-            "infrastructure costs",
-            "infrastructure cost",
-            "infrastructure"
-        ]
-    )
-
-    # -----------------------------------------
-    # AI
-    # -----------------------------------------
-
-    ai_cost = extract_money_after_keyword(
-        text,
-        [
-            "ai costs",
-            "ai cost",
-            "ai"
-        ]
-    )
-
-    # -----------------------------------------
-    # Database
-    # -----------------------------------------
-
-    database = extract_money_after_keyword(
-        text,
-        [
-            "database costs",
-            "database cost",
-            "database"
-        ]
-    )
-
-    # -----------------------------------------
-    # Other
-    # -----------------------------------------
-
-    other = extract_money_after_keyword(
-        text,
-        [
-            "other costs",
-            "other cost",
-            "other"
-        ]
-    )
-
-    # -----------------------------------------
-    # Monthly operating cost
-    # -----------------------------------------
-
-    monthly_cost = extract_money_after_keyword(
-        text,
-        [
-            "monthly operating cost",
-            "monthly operating costs",
-            "monthly cost",
-            "operating cost"
-        ]
-    )
-
-    # -----------------------------------------
-    # If this is only a general budget question,
-    # don't pretend we know the other expenses.
-    # -----------------------------------------
-
-    has_cost_breakdown = any(
-        value is not None
-        for value in [
-            infrastructure,
-            ai_cost,
-            database,
-            other
-        ]
-    )
-
-    if not has_cost_breakdown:
-
-        return (
-            f"Known financial information:\n"
-            f"- Budget: ${budget:,.2f}\n"
-            f"- Infrastructure budget/cost: "
-            f"${budget:,.2f}\n\n"
-            f"Financial analysis:\n"
-            f"The available information indicates a "
-            f"${budget:,.2f} infrastructure budget, but "
-            f"there is not enough information to calculate "
-            f"total monthly operating costs, runway, or "
-            f"profitability.\n\n"
-            f"Important missing information:\n"
-            f"- AI/API costs\n"
-            f"- Database costs\n"
-            f"- Other infrastructure/services\n"
-            f"- Expected revenue\n"
-            f"- Number of users\n"
-            f"- Variable cost per user"
-        )
-
-    # -----------------------------------------
-    # Missing values become zero only when the
-    # user explicitly provides a cost breakdown.
-    # -----------------------------------------
-
-    infrastructure = infrastructure or 0
-    ai_cost = ai_cost or 0
-    database = database or 0
-    other = other or 0
-
-    total_costs = (
-        infrastructure
-        + ai_cost
-        + database
-        + other
-    )
-
-    remaining = budget - total_costs
-
-    result = (
-        f"Financial calculation:\n\n"
-        f"Budget: ${budget:,.2f}\n"
-        f"Infrastructure: ${infrastructure:,.2f}\n"
-        f"AI: ${ai_cost:,.2f}\n"
-        f"Database: ${database:,.2f}\n"
-        f"Other: ${other:,.2f}\n\n"
-        f"Total listed costs: ${total_costs:,.2f}\n"
-        f"Remaining budget: ${remaining:,.2f}"
-    )
-
-    # -----------------------------------------
-    # Runway
-    # -----------------------------------------
-
-    if monthly_cost is not None and monthly_cost > 0:
-
-        months = remaining / monthly_cost
-
-        result += (
-            f"\n\nMonthly operating cost: "
-            f"${monthly_cost:,.2f}\n"
-            f"Estimated runway: "
-            f"{months:.1f} months"
-        )
-
-    elif (
-        "runway" in text_lower
-        or "months can i survive" in text_lower
-        or "how many months" in text_lower
-    ):
-
-        result += (
-            "\n\nRunway cannot be calculated because "
-            "the monthly operating cost was not provided."
-        )
-
-    return result
-
 
 # =========================
 # FINANCIAL AGENT
@@ -317,59 +118,37 @@ def calculate_budget_from_text(
 
 def financial_agent(state: LifeOpsState):
 
-    user_goal = state["user_goal"]
-
-    # -----------------------------------------
-    # First attempt deterministic calculation.
-    # -----------------------------------------
-
-    local_result = calculate_budget_from_text(
-        user_goal
-    )
-
-    if local_result:
-
-        return {
-            "financial_result": local_result
-        }
-
-    # -----------------------------------------
-    # If Python cannot calculate it, use Gemini.
-    # -----------------------------------------
-
     prompt = f"""
-You are the Financial Agent in a multi-agent decision system.
-
-Analyze the user's goal from a financial perspective.
+You are the Financial Agent.
 
 User goal:
-{user_goal}
+{state["user_goal"]}
 
-Research information:
-{state["research_result"]}
+Use financial tools whenever calculations are needed.
 
-Focus on:
+Analyze:
 - Budget
-- Costs
-- Revenue
-- Financial constraints
-- Break-even considerations
-- Important financial assumptions
-- Missing financial information
+- Monthly expenses
+- Runway
+- Break-even
+- Financial assumptions
 
-Do not invent numerical facts.
-
-If information is missing, clearly identify it.
-
-Provide practical financial guidance.
+Do not invent missing numbers.
+If required information is missing, explain what is needed.
 """
 
-    result = ask_gemini(prompt)
+    result = run_agent(
+        model=model,
+        tools=[
+            calculate_monthly_runway,
+            calculate_break_even_users
+        ],
+        prompt=prompt
+    )
 
     return {
         "financial_result": result
     }
-
 
 # =========================
 # RISK AGENT
@@ -378,39 +157,36 @@ Provide practical financial guidance.
 def risk_agent(state: LifeOpsState):
 
     prompt = f"""
-You are the Risk Agent in a multi-agent decision system.
-
-Analyze the user's goal from a risk perspective.
+You are the Risk Agent.
 
 User goal:
 {state["user_goal"]}
 
-Research analysis:
-{state["research_result"]}
+Use the risk calculation tool when appropriate.
 
-Financial analysis:
-{state["financial_result"]}
-
-Identify:
-- Major risks
+Analyze:
 - Technical risks
 - Financial risks
 - Operational risks
-- Important uncertainties
-- Possible mitigation strategies
+- Probability
+- Impact
+- Mitigation
 
 Do not invent facts.
 Clearly identify assumptions.
-
-Provide practical risk recommendations.
 """
 
-    result = ask_gemini(prompt)
+    result = run_agent(
+        model=model,
+        tools=[
+            calculate_risk_score
+        ],
+        prompt=prompt
+    )
 
     return {
         "risk_result": result
-    }
-    
+    }    
 # =========================
 # SUPERVISOR
 # =========================
@@ -499,3 +275,39 @@ Clearly mention assumptions.
     return {
         "final_decision": response.content
     }
+    
+def run_agent(model, tools, prompt):
+
+    model_with_tools = model.bind_tools(tools)
+
+    messages = [
+        HumanMessage(content=prompt)
+    ]
+
+    while True:
+
+        response = model_with_tools.invoke(messages)
+
+        messages.append(response)
+
+        if not response.tool_calls:
+            return response.content
+
+        for tool_call in response.tool_calls:
+
+            tool_name = tool_call["name"]
+            tool_args = tool_call["args"]
+
+            selected_tool = next(
+                tool for tool in tools
+                if tool.name == tool_name
+            )
+
+            tool_result = selected_tool.invoke(tool_args)
+
+            messages.append(
+                ToolMessage(
+                    content=str(tool_result),
+                    tool_call_id=tool_call["id"]
+                )
+            )
