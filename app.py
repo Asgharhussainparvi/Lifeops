@@ -2,32 +2,31 @@ from langgraph.graph import StateGraph, START, END
 
 from agents import (
     LifeOpsState,
-    supervisor_agent,
     research_agent,
     financial_agent,
-    risk_agent
+    risk_agent,
+    final_decision_agent
 )
 
 
+# =========================
+# USER INPUT
+# =========================
+
 user_goal = input("What decision do you want help with? ")
 
+
+# =========================
+# INITIAL STATE
+# =========================
 
 initial_state: LifeOpsState = {
     "user_goal": user_goal,
     "research_result": "",
     "financial_result": "",
     "risk_result": "",
-    "next_agent": ""
+    "final_decision": ""
 }
-
-
-# =========================
-# ROUTER
-# =========================
-
-def route_from_supervisor(state: LifeOpsState):
-
-    return state["next_agent"]
 
 
 # =========================
@@ -36,35 +35,36 @@ def route_from_supervisor(state: LifeOpsState):
 
 graph = StateGraph(LifeOpsState)
 
-graph.add_node("supervisor", supervisor_agent)
+
 graph.add_node("research", research_agent)
 graph.add_node("financial", financial_agent)
 graph.add_node("risk", risk_agent)
+graph.add_node("final_decision", final_decision_agent)
 
 
-# START → SUPERVISOR
+# =========================
+# FAN-OUT
+# =========================
 
-graph.add_edge(START, "supervisor")
-
-
-# SUPERVISOR → SPECIALIST
-
-graph.add_conditional_edges(
-    "supervisor",
-    route_from_supervisor,
-    {
-        "research": "research",
-        "financial": "financial",
-        "risk": "risk"
-    }
-)
+graph.add_edge(START, "research")
+graph.add_edge(START, "financial")
+graph.add_edge(START, "risk")
 
 
-# SPECIALIST → END
+# =========================
+# FAN-IN
+# =========================
 
-graph.add_edge("research", END)
-graph.add_edge("financial", END)
-graph.add_edge("risk", END)
+graph.add_edge("research", "final_decision")
+graph.add_edge("financial", "final_decision")
+graph.add_edge("risk", "final_decision")
+
+
+# =========================
+# FINAL
+# =========================
+
+graph.add_edge("final_decision", END)
 
 
 app = graph.compile()
@@ -77,13 +77,14 @@ app = graph.compile()
 result = app.invoke(initial_state)
 
 
-print("\n========== RESULT ==========\n")
+print("\n========== RESEARCH ==========\n")
+print(result["research_result"])
 
-if result["research_result"]:
-    print(result["research_result"])
+print("\n========== FINANCIAL ==========\n")
+print(result["financial_result"])
 
-if result["financial_result"]:
-    print(result["financial_result"])
+print("\n========== RISK ==========\n")
+print(result["risk_result"])
 
-if result["risk_result"]:
-    print(result["risk_result"])
+print("\n========== FINAL DECISION ==========\n")
+print(result["final_decision"])

@@ -18,9 +18,7 @@ class LifeOpsState(TypedDict):
     research_result: str
     financial_result: str
     risk_result: str
-    next_agent: str
-
-
+    final_decision: str
 # =========================
 # GEMINI MODEL
 # =========================
@@ -456,4 +454,48 @@ risk
 
     return {
         "next_agent": decision
+    }
+    
+def final_decision_agent(state: LifeOpsState):
+
+    prompt = f"""
+You are the Final Decision Agent.
+
+The following specialist agents analyzed the same user decision.
+
+USER GOAL:
+{state["user_goal"]}
+
+RESEARCH ANALYSIS:
+{state["research_result"]}
+
+FINANCIAL ANALYSIS:
+{state["financial_result"]}
+
+RISK ANALYSIS:
+{state["risk_result"]}
+
+Combine all three analyses.
+
+Create a practical final decision.
+
+Include:
+
+1. Overall recommendation
+2. Important reasoning
+3. Financial considerations
+4. Major risks
+5. Important unknowns
+6. Next steps
+
+Do not invent facts.
+Clearly mention assumptions.
+"""
+
+    response = model.invoke([
+        HumanMessage(content=prompt)
+    ])
+
+    return {
+        "final_decision": response.content
     }
