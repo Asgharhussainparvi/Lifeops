@@ -18,6 +18,7 @@ class LifeOpsState(TypedDict):
     research_result: str
     financial_result: str
     risk_result: str
+    next_agent: str
 
 
 # =========================
@@ -410,4 +411,49 @@ Provide practical risk recommendations.
 
     return {
         "risk_result": result
+    }
+    
+# =========================
+# SUPERVISOR
+# =========================
+
+def supervisor_agent(state: LifeOpsState):
+
+    prompt = f"""
+You are the Supervisor of a multi-agent decision system.
+
+User goal:
+{state["user_goal"]}
+
+Decide which specialist should handle this request.
+
+Available specialists:
+
+- research
+  Use for market research, competitors, trends, external information,
+  comparisons, and unknown facts.
+
+- financial
+  Use for budgets, costs, revenue, runway, break-even,
+  and financial calculations.
+
+- risk
+  Use for risks, uncertainty, technical risks,
+  operational risks, and mitigation.
+
+Return ONLY one word:
+
+research
+financial
+risk
+"""
+
+    response = model.invoke([
+        HumanMessage(content=prompt)
+    ])
+
+    decision = response.content.strip().lower()
+
+    return {
+        "next_agent": decision
     }
